@@ -4,6 +4,8 @@ import csv
 import requests
 import datetime
 import json
+import time
+import random
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -13,6 +15,16 @@ SCRAPER_URL = os.getenv("SCRAPER_URL", "http://localhost:5006/scrape")
 SHEET_URL = os.getenv("SHEET_URL", "https://docs.google.com/spreadsheets/d/1OrContixGYzHNT_DaO76p3rP1nvNamRs9r3fuJLsf-k/edit")
 GOOGLE_SHEETS_CREDENTIALS = os.getenv("GOOGLE_SHEETS_CREDENTIALS") # Raw JSON string
 HISTORY_FILE = "redfin_price_history.csv"
+
+# Browser-like headers to help bypass firewalls
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.google.com/",
+    "DNT": "1",
+    "Upgrade-Insecure-Requests": "1"
+}
 
 def extract_price(html_content):
     """
@@ -84,21 +96,35 @@ def update_google_sheet(price_str):
     except Exception as e:
         print(f"Error updating Google Sheet: {e}")
 
-def main():
-    print(f"[{datetime.datetime.now()}] Starting scrape for: {REDFIN_URL}")
+def run_scrape():
+    """Performs a single scrape attempt."""
+    print(f"[{datetime.datetime.now()}] Attempting scrape for: {REDFIN_URL}")
+    
+    # Passing browser-like headers to ScrapeServ (it passes them to the target site)
+    payload = {
+        "url": REDFIN_URL,
+        "wait": 5000, # Increased wait to ensure dynamic price loads
+        "headers": HEADERS
+    }
 
     try:
-        response = requests.post(SCRAPER_URL, json={"url": REDFIN_URL, "wait": 3000}, stream=True)
+        response = requests.post(SCRAPER_URL, json=payload, stream=True, timeout=60)
+        
+        # Check for CAPTCHA in headers
+        if 'captcha' in response.headers.get('x-amzn-waf-action', '').lower():
+            print("! Blocked by CAPTCHA firewall (WAF header detected)")
+            return None
+
         if response.status_code != 200:
             print(f"Error: Scraper returned status {response.status_code}")
-            return
+            return None
 
         # Parse multipart/mixed response
         content_type = response.headers.get("Content-Type", "")
         boundary_match = re.search(r'boundary=(.*)', content_type)
         if not boundary_match:
             print("Error: Multipart boundary not found")
-            return
+            return None
 
         boundary = boundary_match.group(1)
         parts = response.content.split(f"--{boundary}".encode())
@@ -111,43 +137,62 @@ def main():
             if header_end == -1:
                 continue
             body = part[header_end+4:].decode('utf-8', errors='ignore')
+            
+            # Detect CAPTCHA in body text
+            if "captcha" in body.lower() and "verify" in body.lower():
+                print("! Blocked by CAPTCHA page (Body text detected)")
+                return None
+
             # Pick the largest part that contains Redfin-specific HTML
             if "data-rf-test-id" in body and len(body) > len(html_content):
                 html_content = body
 
-        if not html_content and len(parts) > 2:
-            header_end = parts[2].find(b"\r\n\r\n")
-            html_content = parts[2][header_end+4:].decode('utf-8', errors='ignore')
-
         if not html_content:
-            print("Error: Could not find HTML part in response")
-            return
+            print("Error: Could not find meaningful HTML in response")
+            return None
 
-        price_str = extract_price(html_content)
-        if not price_str:
-            print("Error: Could not extract price from HTML")
-            return
-
-        print(f"Success! Current Redfin Estimate: ${price_str}")
-        
-        # Update Google Sheet
-        update_google_sheet(price_str)
-
-        # Append to history CSV (local backup)
-        price_numeric = price_str.replace(",", "")
-        file_exists = os.path.isfile(HISTORY_FILE)
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        with open(HISTORY_FILE, "a", newline="") as f:
-            writer = csv.writer(f)
-            if not file_exists:
-                writer.writerow(["Timestamp", "Price", "URL"])
-            writer.writerow([timestamp, price_numeric, REDFIN_URL])
-
-        print(f"Price saved to local backup {HISTORY_FILE}")
+        return extract_price(html_content)
 
     except Exception as e:
-        print(f"Fatal Error: {e}")
+        print(f"Scrape attempt failed: {e}")
+        return None
+
+def main():
+    max_retries = 3
+    price_str = None
+
+    for attempt in range(max_retries):
+        if attempt > 0:
+            # Random wait between 20 and 60 seconds
+            wait_time = random.randint(20, 60)
+            print(f"Waiting {wait_time}s before retry {attempt+1}/{max_retries}...")
+            time.sleep(wait_time)
+
+        price_str = run_scrape()
+        if price_str:
+            break
+        
+    if not price_str:
+        print("Fatal: All scrape attempts failed or were blocked by CAPTCHA.")
+        return
+
+    print(f"Success! Final Price Extracted: ${price_str}")
+    
+    # Update Google Sheet
+    update_google_sheet(price_str)
+
+    # Append to history CSV (local backup)
+    price_numeric = price_str.replace(",", "")
+    file_exists = os.path.isfile(HISTORY_FILE)
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with open(HISTORY_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["Timestamp", "Price", "URL"])
+        writer.writerow([timestamp, price_numeric, REDFIN_URL])
+
+    print(f"Price saved to local backup {HISTORY_FILE}")
 
 if __name__ == "__main__":
     main()

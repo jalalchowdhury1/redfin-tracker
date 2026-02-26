@@ -24,6 +24,12 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Random Delay (Jitter)
+        run: |
+          delay=$(( (RANDOM % 600) + 1 ))
+          echo "Waiting for $delay seconds..."
+          sleep $delay
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
