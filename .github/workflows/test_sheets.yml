@@ -14,7 +14,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install gspread google-auth
+        run: pip install gspread google-auth google-api-python-client
 
       - name: Test Google Sheets Write
         env:
@@ -23,53 +23,57 @@ jobs:
         run: |
           python3 - <<'EOF'
           import os, json
-          import gspread
           from google.oauth2.service_account import Credentials
+          from googleapiclient.discovery import build
 
           creds_json = os.environ["GOOGLE_SHEETS_CREDENTIALS"]
-          sheet_url  = os.environ["SHEET_URL"]
-
           creds_dict = json.loads(creds_json)
           print(f"Service account: {creds_dict.get('client_email')}")
 
-          scope = ["https://www.googleapis.com/auth/spreadsheets"]
-          creds  = Credentials.from_service_account_info(creds_dict, scopes=scope)
-          client = gspread.authorize(creds)
+          SPREADSHEET_ID = "1OrContixGYzHNT_DaO76p3rP1nvNamRs9r3fuJLsf-k"
 
-          sh = client.open_by_url(sheet_url)
-          print("✓ Spreadsheet opened successfully")
-
-          # Test 1: Try writing to the Redfin tab, Column D (not the main data columns)
-          print("\n--- Test 1: Write to Redfin tab, Column D ---")
+          # Test A: Read-only scope - should work
+          print("\n--- Test A: Read with spreadsheets.readonly scope ---")
           try:
+              creds = Credentials.from_service_account_info(
+                  creds_dict,
+                  scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+              )
+              svc = build("sheets", "v4", credentials=creds)
+              result = svc.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+              print(f"✓ Read OK: '{result.get('properties', {}).get('title')}'")
+          except Exception as e:
+              print(f"✗ Read FAILED: {e}")
+
+          # Test B: Full scope - write a single cell using raw API
+          print("\n--- Test B: Write with full spreadsheets scope (raw API) ---")
+          try:
+              creds = Credentials.from_service_account_info(
+                  creds_dict,
+                  scopes=["https://www.googleapis.com/auth/spreadsheets"]
+              )
+              svc = build("sheets", "v4", credentials=creds)
+              body = {"values": [["$RAW-TEST"]]}
+              result = svc.spreadsheets().values().update(
+                  spreadsheetId=SPREADSHEET_ID,
+                  range="Redfin!D2",
+                  valueInputOption="RAW",
+                  body=body
+              ).execute()
+              print(f"✓ Write SUCCESS: {result.get('updatedCells')} cell(s) updated")
+          except Exception as e:
+              print(f"✗ Write FAILED: {e}")
+
+          # Test C: gspread using service_account_from_dict (modern API)
+          print("\n--- Test C: Write with gspread.service_account_from_dict ---")
+          try:
+              import gspread
+              client = gspread.service_account_from_dict(creds_dict)
+              sh = client.open_by_key(SPREADSHEET_ID)
               ws = sh.worksheet("Redfin")
-              ws.update_cell(2, 4, "TEST-D")
-              print("✓ Column D write SUCCESS — Column C is likely protected")
+              ws.update_cell(2, 4, "$GSPREAD-TEST")
+              print("✓ gspread write SUCCESS")
           except Exception as e:
-              print(f"✗ Column D write FAILED: {e}")
+              print(f"✗ gspread write FAILED: {e}")
 
-          # Test 2: Try writing to the Redfin tab, Column C directly
-          print("\n--- Test 2: Write to Redfin tab, Column C ---")
-          try:
-              ws = sh.worksheet("Redfin")
-              ws.update_cell(2, 3, "$TEST-123")
-              print("✓ Column C write SUCCESS")
-          except Exception as e:
-              print(f"✗ Column C write FAILED: {e}")
-
-          # Test 3: List all sheets and try writing to the first non-Redfin one
-          print("\n--- Test 3: List all sheets ---")
-          for s in sh.worksheets():
-              print(f"  Sheet: '{s.title}'")
-
-          # Test 4: Try adding a new test sheet and writing to it
-          print("\n--- Test 4: Create temp sheet and write ---")
-          try:
-              temp = sh.add_worksheet(title="_temp_test", rows=2, cols=2)
-              temp.update_cell(1, 1, "TEST")
-              print("✓ New sheet write SUCCESS — Redfin tab has protected ranges")
-              sh.del_worksheet(temp)
-              print("✓ Temp sheet deleted")
-          except Exception as e:
-              print(f"✗ New sheet write FAILED: {e} — general permission issue")
           EOF
