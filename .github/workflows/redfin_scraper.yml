@@ -41,6 +41,7 @@ jobs:
           SCRAPER_URL: http://localhost:5006/scrape
           SHEET_URL: https://docs.google.com/spreadsheets/d/1OrContixGYzHNT_DaO76p3rP1nvNamRs9r3fuJLsf-k/edit
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
         run: python scripts/redfin_tracker.py
 
       - name: Commit and push price history
