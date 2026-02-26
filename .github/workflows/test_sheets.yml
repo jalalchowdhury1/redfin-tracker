@@ -31,33 +31,45 @@ jobs:
 
           creds_dict = json.loads(creds_json)
           print(f"Service account: {creds_dict.get('client_email')}")
-          print(f"Project:         {creds_dict.get('project_id')}")
 
           scope = ["https://www.googleapis.com/auth/spreadsheets"]
           creds  = Credentials.from_service_account_info(creds_dict, scopes=scope)
           client = gspread.authorize(creds)
 
-          sh        = client.open_by_url(sheet_url)
-          worksheet = sh.worksheet("Redfin")
-          print("✓ Sheet opened successfully")
+          sh = client.open_by_url(sheet_url)
+          print("✓ Spreadsheet opened successfully")
 
-          # Search for today's date (26-02-2026) and write dummy value to col C
-          import datetime
-          today = datetime.datetime.now().strftime("%d-%m-%Y")
-          print(f"Looking for date: {today}")
-          col_a = worksheet.col_values(1)
+          # Test 1: Try writing to the Redfin tab, Column D (not the main data columns)
+          print("\n--- Test 1: Write to Redfin tab, Column D ---")
+          try:
+              ws = sh.worksheet("Redfin")
+              ws.update_cell(2, 4, "TEST-D")
+              print("✓ Column D write SUCCESS — Column C is likely protected")
+          except Exception as e:
+              print(f"✗ Column D write FAILED: {e}")
 
-          row_index = -1
-          for i, val in enumerate(col_a):
-              if today in val:
-                  row_index = i + 1
-                  break
+          # Test 2: Try writing to the Redfin tab, Column C directly
+          print("\n--- Test 2: Write to Redfin tab, Column C ---")
+          try:
+              ws = sh.worksheet("Redfin")
+              ws.update_cell(2, 3, "$TEST-123")
+              print("✓ Column C write SUCCESS")
+          except Exception as e:
+              print(f"✗ Column C write FAILED: {e}")
 
-          if row_index != -1:
-              worksheet.update_cell(row_index, 3, "$TEST-123")
-              print(f"✓ Wrote dummy value to row {row_index}, Column C")
-          else:
-              print(f"! Date {today} not found in Column A — writing to row 2 as fallback")
-              worksheet.update_cell(2, 3, "$TEST-123")
-              print("✓ Wrote dummy value to row 2, Column C")
+          # Test 3: List all sheets and try writing to the first non-Redfin one
+          print("\n--- Test 3: List all sheets ---")
+          for s in sh.worksheets():
+              print(f"  Sheet: '{s.title}'")
+
+          # Test 4: Try adding a new test sheet and writing to it
+          print("\n--- Test 4: Create temp sheet and write ---")
+          try:
+              temp = sh.add_worksheet(title="_temp_test", rows=2, cols=2)
+              temp.update_cell(1, 1, "TEST")
+              print("✓ New sheet write SUCCESS — Redfin tab has protected ranges")
+              sh.del_worksheet(temp)
+              print("✓ Temp sheet deleted")
+          except Exception as e:
+              print(f"✗ New sheet write FAILED: {e} — general permission issue")
           EOF
