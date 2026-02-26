@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+.env
+redfin_price_history.csv
