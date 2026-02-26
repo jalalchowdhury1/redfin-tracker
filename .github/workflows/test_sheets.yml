@@ -1,0 +1,63 @@
+name: Test Google Sheets Connection
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-sheets:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install gspread google-auth
+
+      - name: Test Google Sheets Write
+        env:
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          SHEET_URL: https://docs.google.com/spreadsheets/d/1OrContixGYzHNT_DaO76p3rP1nvNamRs9r3fuJLsf-k/edit
+        run: |
+          python3 - <<'EOF'
+          import os, json
+          import gspread
+          from google.oauth2.service_account import Credentials
+
+          creds_json = os.environ["GOOGLE_SHEETS_CREDENTIALS"]
+          sheet_url  = os.environ["SHEET_URL"]
+
+          creds_dict = json.loads(creds_json)
+          print(f"Service account: {creds_dict.get('client_email')}")
+          print(f"Project:         {creds_dict.get('project_id')}")
+
+          scope = ["https://www.googleapis.com/auth/spreadsheets"]
+          creds  = Credentials.from_service_account_info(creds_dict, scopes=scope)
+          client = gspread.authorize(creds)
+
+          sh        = client.open_by_url(sheet_url)
+          worksheet = sh.worksheet("Redfin")
+          print("✓ Sheet opened successfully")
+
+          # Search for today's date (26-02-2026) and write dummy value to col C
+          import datetime
+          today = datetime.datetime.now().strftime("%d-%m-%Y")
+          print(f"Looking for date: {today}")
+          col_a = worksheet.col_values(1)
+
+          row_index = -1
+          for i, val in enumerate(col_a):
+              if today in val:
+                  row_index = i + 1
+                  break
+
+          if row_index != -1:
+              worksheet.update_cell(row_index, 3, "$TEST-123")
+              print(f"✓ Wrote dummy value to row {row_index}, Column C")
+          else:
+              print(f"! Date {today} not found in Column A — writing to row 2 as fallback")
+              worksheet.update_cell(2, 3, "$TEST-123")
+              print("✓ Wrote dummy value to row 2, Column C")
+          EOF
