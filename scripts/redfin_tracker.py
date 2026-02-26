@@ -50,6 +50,9 @@ def update_google_sheet(price_str):
     try:
         scope = ["https://www.googleapis.com/auth/spreadsheets"]
         creds_dict = json.loads(GOOGLE_SHEETS_CREDENTIALS)
+        service_account_email = creds_dict.get("client_email")
+        print(f"Using service account: {service_account_email}")
+        
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(creds)
         
