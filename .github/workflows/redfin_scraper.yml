@@ -2,7 +2,7 @@ name: Daily Redfin Price Tracker
 
 on:
   schedule:
-    - cron: '0 3 * * *'  # Runs at 3 AM UTC every day
+    - cron: '0 8 * * *'  # Runs at 8 AM UTC (3 AM EST) every day
   workflow_dispatch:      # Allows manual trigger from GitHub Actions tab
 
 jobs:
