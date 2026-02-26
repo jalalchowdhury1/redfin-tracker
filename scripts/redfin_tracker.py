@@ -8,14 +8,12 @@ import time
 import random
 import gspread
 from google.oauth2.service_account import Credentials
-from twocaptcha import TwoCaptcha
 
 # Configuration
 REDFIN_URL = os.getenv("REDFIN_URL", "https://www.redfin.com/RI/Providence/384-Benefit-St-02903/unit-3/home/52248182")
 SCRAPER_URL = os.getenv("SCRAPER_URL", "http://localhost:5006/scrape")
 SHEET_URL = os.getenv("SHEET_URL", "https://docs.google.com/spreadsheets/d/1OrContixGYzHNT_DaO76p3rP1nvNamRs9r3fuJLsf-k/edit")
 GOOGLE_SHEETS_CREDENTIALS = os.getenv("GOOGLE_SHEETS_CREDENTIALS") # Raw JSON string
-TWOCAPTCHA_API_KEY = os.getenv("TWOCAPTCHA_API_KEY")
 HISTORY_FILE = "redfin_price_history.csv"
 
 # Browser-like headers to help bypass firewalls
@@ -55,27 +53,6 @@ def extract_price(html_content):
         return json_match.group(1)
 
     return None
-
-def solve_waf_captcha(sitekey, iv, context, current_url):
-    """Uses 2Captcha to solve the Amazon WAF challenge."""
-    if not TWOCAPTCHA_API_KEY:
-        print("Error: TWOCAPTCHA_API_KEY not set. Cannot solve CAPTCHA.")
-        return None
-
-    print(f"[{datetime.datetime.now()}] Sending Amazon WAF challenge to 2Captcha...")
-    solver = TwoCaptcha(TWOCAPTCHA_API_KEY)
-    try:
-        result = solver.amazon_waf(
-            sitekey=sitekey,
-            iv=iv,
-            context=context,
-            url=current_url
-        )
-        print("✓ CAPTCHA solved successfully")
-        return result['code']
-    except Exception as e:
-        print(f"✗ 2Captcha Error: {e}")
-        return None
 
 def update_google_sheet(price_str):
     if not GOOGLE_SHEETS_CREDENTIALS:
@@ -120,7 +97,7 @@ def update_google_sheet(price_str):
         print(f"Error updating Google Sheet: {e}")
 
 def run_scrape():
-    """Performs a single scrape attempt, including WAF bypass if needed."""
+    """Performs a single scrape attempt."""
     print(f"[{datetime.datetime.now()}] Attempting scrape for: {REDFIN_URL}")
     
     payload = {
@@ -132,9 +109,12 @@ def run_scrape():
     try:
         response = requests.post(SCRAPER_URL, json=payload, stream=True, timeout=60)
         
-        # Detect Amazon WAF Challenge
-        is_captcha = 'captcha' in response.headers.get('x-amzn-waf-action', '').lower()
-        
+        # Identifty Amazon WAF or general CAPTCHA
+        is_waf_captcha = 'captcha' in response.headers.get('x-amzn-waf-action', '').lower()
+        if is_waf_captcha:
+            print("! Blocked by Amazon WAF CAPTCHA firewall")
+            return None
+
         # Parse response parts
         content_type = response.headers.get("Content-Type", "")
         boundary_match = re.search(r'boundary=(.*)', content_type)
@@ -154,37 +134,16 @@ def run_scrape():
                 continue
             body = part[header_end+4:].decode('utf-8', errors='ignore')
 
-            # Identify Amazon WAF parameters if it's a captcha page
-            if "key" in body and "iv" in body and "context" in body and ("aws" in body.lower() or "amazon" in body.lower()):
-                print("! Amazon WAF Challenge detected in body")
-                
-                # Extract parameters for 2Captcha
-                sitekey_match = re.search(r'"key"\s*:\s*"(.*?)"', body)
-                iv_match = re.search(r'"iv"\s*:\s*"(.*?)"', body)
-                context_match = re.search(r'"context"\s*:\s*"(.*?)"', body)
-                
-                if sitekey_match and iv_match and context_match:
-                    token = solve_waf_captcha(
-                        sitekey=sitekey_match.group(1),
-                        iv=iv_match.group(1),
-                        context=context_match.group(1),
-                        current_url=REDFIN_URL
-                    )
-                    
-                    if token:
-                        print("Resubmitting request with solution token...")
-                        # In a real WAF bypass, we'd append the token to the URL or headers
-                        # For ScrapeServ, we'll try adding it as a query param or cookie if we knew the exact format.
-                        # Usually, it's submitted via a POST or as a 'aws-waf-token' cookie.
-                        # For now, we'll log that we have the token.
-                        # NOTE: Proper bypass often requires an interactive browser session.
-                        return None # Placeholder: full bypass logic depends on how ScrapeServ handles cookies
+            # Detect CAPTCHA indicators in body
+            if "captcha" in body.lower() and "verify" in body.lower():
+                print("! CAPTCHA challenge detected in page content")
+                return None
                 
             if "data-rf-test-id" in body and len(body) > len(html_content):
                 html_content = body
 
         if not html_content:
-            print("Error: Could not find meaningful HTML or CAPTCHA was insurmountable")
+            print("Error: Could not find meaningful HTML in response")
             return None
 
         return extract_price(html_content)
